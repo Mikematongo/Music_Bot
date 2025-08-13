@@ -2,16 +2,22 @@ import os, re, shutil, tempfile, uuid
 from pathlib import Path
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, InlineQueryHandler, ContextTypes, filters
-from youtubesearchpython import VideosSearch
 import yt_dlp
 
 # ----- Config -----
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()  # Railway environment variable
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 RESULTS_LIMIT = 8
 MP3_QUALITY = "128"
 
 def safe_name(name: str, max_len=80) -> str:
     return re.sub(r'[\\/:*?"<>|]+', " ", (name or "song")).strip()[:max_len] or "song"
+
+# ----- YouTube Search via yt-dlp -----
+def search_youtube(query: str, limit: int = RESULTS_LIMIT):
+    ydl_opts = {"quiet": True, "skip_download": True, "extract_flat": True}
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        result = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
+        return result.get("entries", [])
 
 # ----- Handlers -----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -42,29 +48,23 @@ async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_results(update: Update, query: str):
     try:
-        videos_search = VideosSearch(query, limit=RESULTS_LIMIT)
-        results = videos_search.result().get("result", [])
-    except TypeError:
-        return await update.message.reply_text("⚠️ Search failed due to library issue. Please try again.")
+        hits = search_youtube(query, RESULTS_LIMIT)
     except Exception as e:
-        return await update.message.reply_text(f"⚠️ Search error: {e}")
+        return await update.message.reply_text(f"⚠️ Search failed: {e}")
 
-    if not results:
+    if not hits:
         return await update.message.reply_text("⚠️ No matches found. Try a different name.")
 
     rows = []
-    for i, video in enumerate(results, start=1):
-        title = video.get("title", "Untitled")
-        duration = video.get("duration") or "?"
-        link = video.get("link")
+    for i, v in enumerate(hits, start=1):
+        title = v.get("title", "Untitled")
+        duration = v.get("duration") or "?"
+        link = v.get("webpage_url")
         btn = InlineKeyboardButton(f"{i}. {title} ({duration})", callback_data=f"pick|{link}")
         rows.append([btn])
 
-    await update.message.reply_text(
-        "🎶 *Select a match:*",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(rows)
-    )
+    await update.message.reply_text("🎶 *Select a match:*", parse_mode="Markdown",
+                                    reply_markup=InlineKeyboardMarkup(rows))
 
 async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -95,17 +95,16 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not qtext:
         return
     try:
-        videos_search = VideosSearch(qtext, limit=RESULTS_LIMIT)
-        results = videos_search.result().get("result", [])
+        hits = search_youtube(qtext, RESULTS_LIMIT)
     except Exception:
-        results = []
+        hits = []
 
-    responses = []
-    for v in results:
+    results = []
+    for v in hits:
         title = v.get("title", "Untitled")
         duration = v.get("duration") or "?"
-        link = v.get("link")
-        responses.append(
+        link = v.get("webpage_url")
+        results.append(
             InlineQueryResultArticle(
                 id=str(uuid.uuid4()),
                 title=title,
@@ -113,7 +112,7 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 input_message_content=InputTextMessageContent(f"/get {link}")
             )
         )
-    await update.inline_query.answer(responses, cache_time=0)
+    await update.inline_query.answer(results, cache_time=0)
 
 async def get_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -177,6 +176,7 @@ async def download_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ur
 def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN not set!")
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # Handlers
@@ -190,9 +190,8 @@ def main():
     app.add_handler(CallbackQueryHandler(on_again, pattern=r"^again\|"))
     app.add_handler(InlineQueryHandler(inline_query))
 
-    # Polling (works on Railway)
-    import asyncio
-    asyncio.run(app.run_polling())
+    # Polling
+    app.run_polling()
 
 if __name__ == "__main__":
     main()

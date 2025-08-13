@@ -1,6 +1,6 @@
 import os, re, shutil, tempfile, uuid
 from pathlib import Path
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent, Bot
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, InlineQueryHandler, ContextTypes, filters
 from youtubesearchpython import VideosSearch
 import yt_dlp
@@ -170,7 +170,12 @@ async def download_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ur
 def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN not set!")
-    
+
+    # --- Clear webhook to prevent polling conflict ---
+    bot = Bot(BOT_TOKEN)
+    bot.delete_webhook()
+    print("Webhook cleared. Bot ready for polling.")
+
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # Handlers
@@ -184,7 +189,7 @@ def main():
     app.add_handler(CallbackQueryHandler(on_again, pattern=r"^again\|"))
     app.add_handler(InlineQueryHandler(inline_query))
 
-    # Start polling (no webhook yet)
+    # Polling (works 24/7 on Railway)
     app.run_polling()
 
 if __name__ == "__main__":

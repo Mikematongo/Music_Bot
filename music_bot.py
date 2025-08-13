@@ -9,7 +9,7 @@ import yt_dlp
 
 # ----- Config -----
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
-RESULTS_LIMIT = 8
+RESULTS_LIMIT = 20
 MP3_QUALITY = "192"
 
 # Keep search results per user

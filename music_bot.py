@@ -1,30 +1,14 @@
 import os, re, shutil, tempfile, uuid
 from pathlib import Path
-
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    InlineQueryResultArticle,
-    InputTextMessageContent,
-)
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    InlineQueryHandler,
-    ContextTypes,
-    filters,
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, InlineQueryHandler, ContextTypes, filters
 from youtubesearchpython import VideosSearch
 import yt_dlp
 
-# ========= Config =========
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()  # use Railway environment variable
+# ----- Config -----
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()  # Railway environment variable
 RESULTS_LIMIT = 8
 MP3_QUALITY = "128"
-# ==========================
 
 def safe_name(name: str, max_len=80) -> str:
     return re.sub(r'[\\/:*?"<>|]+', " ", (name or "song")).strip()[:max_len] or "song"
@@ -93,7 +77,6 @@ async def on_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     url = q.data.split("|", 1)[1]
     await q.edit_message_text("⬇️ Downloading and tagging… please wait.")
-
     await download_and_send(context, q.message.chat_id, url)
 
 async def on_again(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -105,7 +88,6 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     qtext = (update.inline_query.query or "").strip()
     if not qtext:
         return
-
     try:
         hits = VideosSearch(qtext, limit=RESULTS_LIMIT).result().get("result", [])
     except Exception:
@@ -184,36 +166,25 @@ async def download_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int, ur
         except Exception as e:
             await context.bot.send_message(chat_id, f"⚠️ Send error: {e}")
 
-# ----- Main -----
+# ----- Run Bot -----
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN not set. Set environment variable BOT_TOKEN to your bot token.")
-
+        raise RuntimeError("BOT_TOKEN not set!")
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("search", search_cmd))
     app.add_handler(CommandHandler("get", get_cmd))
-
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_search))
     app.add_handler(CallbackQueryHandler(on_pick, pattern=r"^pick\|"))
     app.add_handler(CallbackQueryHandler(on_download, pattern=r"^dl\|"))
     app.add_handler(CallbackQueryHandler(on_again, pattern=r"^again\|"))
     app.add_handler(InlineQueryHandler(inline_query))
 
-    # ---------- WEBHOOK SETUP ----------
-    PORT = int(os.environ.get("PORT", "8080"))
-    URL = os.environ.get("WEBHOOK_URL")  # Set in Railway as: https://yourapp.up.railway.app
-    if not URL:
-        raise RuntimeError("WEBHOOK_URL environment variable not set!")
-
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=BOT_TOKEN,
-        webhook_url=f"{URL}/{BOT_TOKEN}"
-    )
+    # Polling
+    app.run_polling()
 
 if __name__ == "__main__":
     main()

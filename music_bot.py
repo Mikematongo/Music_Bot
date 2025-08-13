@@ -1,7 +1,28 @@
-import os, re, shutil, tempfile, uuid
+import os
+import re
+import shutil
+import tempfile
+import uuid
 from pathlib import Path
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent, Bot
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, InlineQueryHandler, ContextTypes, filters
+import asyncio
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
+    Bot,
+)
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    InlineQueryHandler,
+    ContextTypes,
+    filters,
+)
 from youtubesearchpython import VideosSearch
 import yt_dlp
 
@@ -37,7 +58,9 @@ async def text_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        return await update.message.reply_text("❌ Usage: `/search <song or album>`", parse_mode="Markdown")
+        return await update.message.reply_text(
+            "❌ Usage: `/search <song or album>`", parse_mode="Markdown"
+        )
     await show_results(update, " ".join(context.args))
 
 async def show_results(update: Update, query: str):
@@ -57,8 +80,9 @@ async def show_results(update: Update, query: str):
         btn = InlineKeyboardButton(f"{i}. {title} ({duration})", callback_data=f"pick|{link}")
         rows.append([btn])
 
-    await update.message.reply_text("🎶 *Select a match:*", parse_mode="Markdown",
-                                    reply_markup=InlineKeyboardMarkup(rows))
+    await update.message.reply_text(
+        "🎶 *Select a match:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(rows)
+    )
 
 async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -110,7 +134,9 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        return await update.message.reply_text("❌ Usage: `/get <YouTube link>`", parse_mode="Markdown")
+        return await update.message.reply_text(
+            "❌ Usage: `/get <YouTube link>`", parse_mode="Markdown"
+        )
     url = context.args[0]
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("▶️ Play / Download MP3", callback_data=f"dl|{url}")],
@@ -171,10 +197,8 @@ def main():
     if not BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN not set!")
 
-    # --- Clear webhook to prevent polling conflict ---
-    bot = Bot(BOT_TOKEN)
-    bot.delete_webhook()
-    print("Webhook cleared. Bot ready for polling.")
+    # ----- Clear existing webhook to avoid Conflict -----
+    asyncio.run(Bot(BOT_TOKEN).delete_webhook())
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -189,7 +213,8 @@ def main():
     app.add_handler(CallbackQueryHandler(on_again, pattern=r"^again\|"))
     app.add_handler(InlineQueryHandler(inline_query))
 
-    # Polling (works 24/7 on Railway)
+    # Polling
+    print("Bot started successfully. Listening for messages…")
     app.run_polling()
 
 if __name__ == "__main__":

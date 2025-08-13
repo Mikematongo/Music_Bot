@@ -1,196 +1,128 @@
-import os, re, shutil, tempfile, uuid
-from pathlib import Path
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, InlineQueryHandler, ContextTypes, filters
+import logging
+import os
 import yt_dlp
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters
+)
+import asyncio
 
-# ----- Config -----
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
-RESULTS_LIMIT = 8
-MP3_QUALITY = "128"
+# Enable logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-def safe_name(name: str, max_len=80) -> str:
-    return re.sub(r'[\\/:*?"<>|]+', " ", (name or "song")).strip()[:max_len] or "song"
+# Your Telegram bot token
+BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
 
-# ----- YouTube Search via yt-dlp -----
-def search_youtube(query: str, limit: int = RESULTS_LIMIT):
-    ydl_opts = {"quiet": True, "skip_download": True, "extract_flat": True}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        result = ydl.extract_info(f"ytsearch{limit}:{query}", download=False)
-        return result.get("entries", [])
+# Dictionary to store search results for each user
+user_search_results = {}
 
-# ----- Handlers -----
+# Start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🎵 *Welcome!*\n"
-        "Just type a *song or album name* and I'll show matches.\n\n"
-        "Then pick a result:\n"
-        "• ▶️ *Play/Download MP3* (sent as audio, streamable in Telegram)\n"
-        "• 🔗 *Open on YouTube*\n\n"
-        "You can also search from anywhere with inline mode:\n"
-        "Type `@{bot} <song>` in any chat."
-    ).format(bot=context.bot.username)
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text("🎵 Send me a song name to search.")
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    return await start(update, context)
-
-async def text_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = (update.message.text or "").strip()
+# Search handler
+async def search_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.message.text.strip()
     if not query:
-        return await update.message.reply_text("❌ Please type a song or album name.")
-    await show_results(update, query)
-
-async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        return await update.message.reply_text("❌ Usage: `/search <song or album>`", parse_mode="Markdown")
-    await show_results(update, " ".join(context.args))
-
-async def show_results(update: Update, query: str):
-    try:
-        hits = search_youtube(query, RESULTS_LIMIT)
-    except Exception as e:
-        return await update.message.reply_text(f"⚠️ Search failed: {e}")
-
-    if not hits:
-        return await update.message.reply_text("⚠️ No matches found. Try a different name.")
-
-    rows = []
-    for i, v in enumerate(hits, start=1):
-        title = v.get("title", "Untitled")
-        duration = v.get("duration") or "?"
-        link = v.get("webpage_url")
-        btn = InlineKeyboardButton(f"{i}. {title} ({duration})", callback_data=f"pick|{link}")
-        rows.append([btn])
-
-    await update.message.reply_text("🎶 *Select a match:*", parse_mode="Markdown",
-                                    reply_markup=InlineKeyboardMarkup(rows))
-
-async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    url = q.data.split("|", 1)[1]
-
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("▶️ Play / Download MP3", callback_data=f"dl|{url}")],
-        [InlineKeyboardButton("🔗 Open on YouTube", url=url)],
-        [InlineKeyboardButton("🔎 Search again", callback_data="again|_")]
-    ])
-    await q.edit_message_text("What would you like to do?", reply_markup=kb)
-
-async def on_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    url = q.data.split("|", 1)[1]
-    await q.edit_message_text("⬇️ Downloading and tagging… please wait.")
-    await download_and_send(context, q.message.chat_id, url)
-
-async def on_again(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    await q.edit_message_text("🔎 Type a song or album name…")
-
-async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    qtext = (update.inline_query.query or "").strip()
-    if not qtext:
+        await update.message.reply_text("❌ Please type a song name.")
         return
+
+    await update.message.reply_text("🔍 Searching...")
+
+    # Search using yt-dlp
+    ydl_opts = {
+        'quiet': True,
+        'skip_download': True,
+        'extract_flat': True,
+        'default_search': 'ytsearch10'
+    }
+
     try:
-        hits = search_youtube(qtext, RESULTS_LIMIT)
-    except Exception:
-        hits = []
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(query, download=False)
+            if "entries" not in info:
+                await update.message.reply_text("⚠️ No results found.")
+                return
 
-    results = []
-    for v in hits:
-        title = v.get("title", "Untitled")
-        duration = v.get("duration") or "?"
-        link = v.get("webpage_url")
-        results.append(
-            InlineQueryResultArticle(
-                id=str(uuid.uuid4()),
-                title=title,
-                description=f"{duration} • tap to choose action",
-                input_message_content=InputTextMessageContent(f"/get {link}")
+            entries = info["entries"][:5]  # top 5 results
+            buttons = []
+            user_search_results[update.effective_chat.id] = {}
+
+            for idx, video in enumerate(entries):
+                title = video.get("title", "Unknown title")
+                url = video.get("url")
+                user_search_results[update.effective_chat.id][str(idx)] = f"https://youtube.com/watch?v={url}"
+                buttons.append([InlineKeyboardButton(title, callback_data=str(idx))])
+
+            await update.message.reply_text(
+                "🎶 Select a song:",
+                reply_markup=InlineKeyboardMarkup(buttons)
             )
-        )
-    await update.inline_query.answer(results, cache_time=0)
 
-async def get_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        return await update.message.reply_text("❌ Usage: `/get <YouTube link>`", parse_mode="Markdown")
-    url = context.args[0]
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("▶️ Play / Download MP3", callback_data=f"dl|{url}")],
-        [InlineKeyboardButton("🔗 Open on YouTube", url=url)],
-    ])
-    await update.message.reply_text("Choose an action:", reply_markup=kb)
+    except Exception as e:
+        logger.error(f"Search error: {e}")
+        await update.message.reply_text("⚠️ Search failed. Please try again.")
 
-async def download_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int, url: str):
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp = Path(tmpdir)
-        ydl_opts = {
-            "format": "bestaudio/best",
-            "outtmpl": str(tmp / "%(title).80s.%(ext)s"),
-            "noplaylist": True,
-            "quiet": True,
-            "writethumbnail": True,
-            "prefer_ffmpeg": True,
-            "postprocessors": [
-                {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": MP3_QUALITY},
-                {"key": "EmbedThumbnail"},
-                {"key": "FFmpegMetadata"},
-            ],
-        }
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-        except Exception as e:
-            return await context.bot.send_message(chat_id, f"⚠️ Download error: {e}")
+# Handle song selection
+async def song_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-        title = info.get("title", "Unknown Song")
-        artist = info.get("artist") or info.get("uploader") or info.get("channel") or ""
-        mp3_candidates = list(tmp.glob("*.mp3"))
-        if not mp3_candidates:
-            return await context.bot.send_message(chat_id, "⚠️ No MP3 produced.")
+    user_id = update.effective_chat.id
+    selection = query.data
 
-        src = mp3_candidates[0]
-        nice = safe_name(f"{artist} - {title}" if artist else title) + ".mp3"
-        final_path = tmp / nice
-        try:
-            shutil.move(str(src), str(final_path))
-        except Exception:
-            final_path = src
+    if user_id not in user_search_results or selection not in user_search_results[user_id]:
+        await query.edit_message_text("❌ Invalid selection.")
+        return
 
-        caption = f"🎧 {title}" + (f"\n👤 {artist}" if artist else "")
-        try:
-            await context.bot.send_audio(
-                chat_id=chat_id,
-                audio=final_path.open("rb"),
-                title=title[:128],
-                performer=artist[:128] if artist else None,
-                caption=caption,
-            )
-        except Exception as e:
-            await context.bot.send_message(chat_id, f"⚠️ Send error: {e}")
+    video_url = user_search_results[user_id][selection]
+    await query.edit_message_text("⬇️ Downloading song...")
 
-# ----- Run Bot -----
+    # Download audio
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': '%(title)s.%(ext)s',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'quiet': True
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            filename = ydl.prepare_filename(info).replace(".webm", ".mp3").replace(".m4a", ".mp3")
+
+        # Send the song
+        await context.bot.send_audio(chat_id=user_id, audio=open(filename, 'rb'), title=info.get("title"))
+
+        # Remove file after sending
+        os.remove(filename)
+
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        await query.edit_message_text("⚠️ Failed to download song.")
+
+# Main function
 def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN not set!")
-
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Handlers
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("search", search_cmd))
-    app.add_handler(CommandHandler("get", get_cmd))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_search))
-    app.add_handler(CallbackQueryHandler(on_pick, pattern=r"^pick\|"))
-    app.add_handler(CallbackQueryHandler(on_download, pattern=r"^dl\|"))
-    app.add_handler(CallbackQueryHandler(on_again, pattern=r"^again\|"))
-    app.add_handler(InlineQueryHandler(inline_query))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, search_song))
+    app.add_handler(CallbackQueryHandler(song_selected))
 
-    # Polling
+    print("✅ Bot is running...")
     app.run_polling()
 
 if __name__ == "__main__":

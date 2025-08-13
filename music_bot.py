@@ -59,8 +59,7 @@ async def show_results(update: Update, query: str):
     for i, v in enumerate(hits):
         title = v.get("title", "Untitled")
         duration = v.get("duration") or "?"
-        video_id = v.get("id")  # Use ID to fix download later
-        btn = InlineKeyboardButton(f"{i+1}. {title} ({duration})", callback_data=str(i))
+        btn = InlineKeyboardButton(f"{i+1}. {title} ({duration})", callback_data=f"pick|{i}")
         rows.append([btn])
 
     await update.message.reply_text("🎶 *Select a match:*", parse_mode="Markdown",
@@ -69,26 +68,42 @@ async def show_results(update: Update, query: str):
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     user_id = query.from_user.id
+
     if user_id not in user_search_results:
         await query.edit_message_text("⚠️ Session expired. Please search again.")
         return
 
-    song_index = int(query.data)
-    song_info = user_search_results[user_id][song_index]
+    data = query.data
 
-    song_url = song_info.get('url')
-    if not song_url.startswith("http"):
-        song_url = f"https://www.youtube.com/watch?v={song_info.get('id')}"
+    if data.startswith("pick|"):
+        index = int(data.split("|")[1])
+        song_info = user_search_results[user_id][index]
+        song_url = song_info.get('url')
+        if not song_url.startswith("http"):
+            song_url = f"https://www.youtube.com/watch?v={song_info.get('id')}"
+        song_title = song_info.get("title", "Unknown Song")
 
-    song_title = song_info.get("title", "Unknown Song")
-    await query.edit_message_text(f"⬇️ Downloading: {song_title}")
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("▶️ Play / Download MP3", callback_data=f"dl|{song_url}")],
+            [InlineKeyboardButton("🔗 Open on YouTube", url=song_url)],
+            [InlineKeyboardButton("🔎 Search Again", callback_data="again|_")]
+        ])
+        await query.edit_message_text(f"🎵 *{song_title}*", reply_markup=kb, parse_mode="Markdown")
 
+    elif data.startswith("dl|"):
+        url = data.split("|")[1]
+        await query.edit_message_text("⬇️ Downloading… please wait.")
+        await download_and_send(context, user_id, url)
+
+    elif data.startswith("again|"):
+        await query.edit_message_text("🔎 Type a song or album name…")
+
+async def download_and_send(context: ContextTypes.DEFAULT_TYPE, chat_id: int, url: str):
     try:
         ydl_opts = {
             'format': 'bestaudio/best',
-            'outtmpl': f'{safe_name(song_title)}.%(ext)s',
+            'outtmpl': '%(title)s.%(ext)s',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
@@ -98,14 +113,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
 
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(ydl_opts).download([song_url]))
+        await loop.run_in_executor(None, lambda: yt_dlp.YoutubeDL(ydl_opts).download([url]))
 
-        file_path = f"{safe_name(song_title)}.mp3"
-        await context.bot.send_audio(chat_id=user_id, audio=open(file_path, 'rb'), title=song_title)
+        info = yt_dlp.YoutubeDL({'quiet': True}).extract_info(url, download=False)
+        file_path = safe_name(info.get("title", "song")) + ".mp3"
+        await context.bot.send_audio(chat_id=chat_id, audio=open(file_path, 'rb'), title=info.get("title"))
         os.remove(file_path)
 
     except Exception as e:
-        await context.bot.send_message(chat_id=user_id, text=f"⚠️ Download error: {e}")
+        await context.bot.send_message(chat_id=chat_id, text=f"⚠️ Download error: {e}")
 
 # ----- Run Bot -----
 def main():
@@ -114,7 +130,6 @@ def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_search))
